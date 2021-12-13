@@ -8,7 +8,7 @@ from cherenkov_photon_array import CherenkovPhotonArray as cpa
 
 
 class Egen(EnergyDistribution):
-
+    """This is a class for drawing random charged particle energies"""
     def __init__(self, t, ul):
         super().__init__('Tot',t, ul)
         self.t = t
@@ -27,7 +27,7 @@ class Egen(EnergyDistribution):
         return np.interp(rvs,self.cdf,self.lEs)
 
 class Qgen(AngularDistribution):
-    """docstring for ."""
+    """This is a class for drawing random charged particle angles"""
 
     def __init__(self, lE):
         super().__init__(lE)
@@ -54,6 +54,22 @@ class Qgen(AngularDistribution):
         rvs = st.uniform.rvs(size=N)
         return np.interp(rvs,self.cdf,self.qs), rvs
 
+class Qgen_from_table():
+    """This is a class for drawing random charged particle angles"""
+    q_table_file = 'qecdf_lE.npz'
+    def __init__(self):
+        self.table = np.load(self.q_table_file)
+        self.lEs = self.table['lEs']
+        self.cdfs = self.table['qecdf_lE']
+
+    def gen_theta(self,lE,N=1):
+        rvs = st.uniform.rvs(size=N)
+        diff = np.abs(lE-self.lEs)
+        # i_lE = np.searchsorted(self.lEs,lE)
+        i_lE = np.abs(lE-self.lEs).argmin()
+        cdf = self.cdfs[i_lE]
+        return np.interp(rvs,cdf[1],cdf[0]), rvs
+
 
 class mcCherenkov():
     """docstring for ."""
@@ -67,6 +83,7 @@ class mcCherenkov():
     def __init__(self, t, Nch, min_l = 300, max_l = 600):
         self.t = t
         self.Egen = Egen(self.t, self.ul)
+        self.Qgen = Qgen_from_table()
         lE_array = self.throw_lE(Nch)
         self.lE_array = lE_array[lE_array>self.min_lE]
         self.theta_e = self.make_theta_e(self.lE_array)
@@ -122,6 +139,20 @@ class mcCherenkov():
         '''
         return Qgen(lE).gen_theta(N)[0]
 
+    def throw_qe_table(self, lE, N=1):
+        '''
+        Draw values from normalized angular distribution for particles of
+        log energy lE
+
+        parameters:
+        lE : log energy (MeV) to set energy distribution
+        N : number of thatas to be drawn
+
+        returns:
+        array of thetas (radians) of size N
+        '''
+        return self.Qgen.gen_theta(lE,N)[0]
+
     def throw_phi(self,N=1):
         return 2*np.pi*st.uniform.rvs(size=N)
 
@@ -156,7 +187,8 @@ class mcCherenkov():
         '''
         theta_e = np.empty_like(lEs)
         for i,lE in enumerate(lEs):
-            theta_e[i] = self.throw_qe(lE)
+            # theta_e[i] = self.throw_qe(lE)
+            theta_e[i] = self.throw_qe_table(lE)
         return theta_e
 
     def calculate_theta(self,lEs):
