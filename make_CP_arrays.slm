@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH --account=bergman
+#SBATCH --partition=notchpeak
+#SBATCH --time=4000
+#SBATCH --array=0-20
+#SBATCH --nodes=2
+#SBATCH -J CP_array
+#SBATCH -o /uufs/chpc.utah.edu/common/home/u0790821/outputs/CP_array-%A-%a.out
+#SBATCH -e /uufs/chpc.utah.edu/common/home/u0790821/outputs/CP_array-%A-%a.err
+
+echo Beginning job on `hostname` on `date`
+echo Job number $SLURM_JOB_ID
+echo Running on nodes: $SLURM_NODELIST
+
+let T=2*$SLURM_ARRAY_TASK_ID-20
+echo $T
+python make_CP_array.py $T
+
+echo Job completed on `date`.
