@@ -57,18 +57,41 @@ class Qgen(AngularDistribution):
 class Qgen_from_table():
     """This is a class for drawing random charged particle angles"""
     q_table_file = 'qecdf_lE.npz'
+
     def __init__(self):
         self.table = np.load(self.q_table_file)
         self.lEs = self.table['lEs']
         self.cdfs = self.table['qecdf_lE']
 
     def gen_theta(self,lE,N=1):
+        """This function generates N charged particle angles
+        from the distribution corresponding to lE"""
         rvs = st.uniform.rvs(size=N)
         diff = np.abs(lE-self.lEs)
         # i_lE = np.searchsorted(self.lEs,lE)
         i_lE = np.abs(lE-self.lEs).argmin()
         cdf = self.cdfs[i_lE]
-        return np.interp(rvs,cdf[1],cdf[0]), rvs
+        return np.interp(rvs,cdf[1],cdf[0])#, rvs
+
+    def gen_thetas(self,cdf,N):
+        rvs = st.uniform.rvs(size=N)
+        return np.interp(rvs,cdf[1],cdf[0])
+
+    def bin_lEs(self, lE_array):
+        dlE = np.diff(self.lEs)[0] / 2
+        bins = np.empty(self.lEs.size + 1)
+        bins[0] = self.lEs[0] - dlE
+        bins[1:] = self.lEs + dlE
+        return np.histogram(lE_array, bins = bins)[0]
+
+    def lE_to_qe(self,lE_array):
+        N_per_lE = self.bin_lEs(lE_array)
+        qe = []
+        for i,lE in enumerate(self.lEs):
+            qe.extend(self.gen_thetas(self.cdfs[i],N_per_lE[i]))
+        return np.asarray(qe)
+
+
 
 
 class mcCherenkov():
@@ -82,23 +105,26 @@ class mcCherenkov():
 
     def __init__(self, t, Nch, min_l = 300, max_l = 600):
         self.t = t
+        self.Nch = Nch
         self.Egen = Egen(self.t, self.ul)
         self.Qgen = Qgen_from_table()
         lE_array = self.throw_lE(Nch)
         self.lE_array = lE_array[lE_array>self.min_lE]
-        self.theta_e = self.make_theta_e(self.lE_array)
         self.theta_bins, self.mid_theta_bins = self.make_bins()
-        # self.gg_list = self.make_gg_list()
-        self.gg_array = self.make_gg_array()
+        self.gg_array, self.ratio_array = self.make_gg_array()
+
+    def make_ratio(self, theta):
+        return theta.size/self.Nch
 
     def make_gg_t_delta(self,delta):
         lE_Cher_bool = self.throw_gamma(self.lE_array,delta)
         lE_Cher = self.lE_array[lE_Cher_bool]
-        theta_e = self.theta_e[lE_Cher_bool]
+        # theta_e = self.theta_e[lE_Cher_bool]
+        theta_e = self.Qgen.lE_to_qe(lE_Cher)
         theta_g = cp.cherenkov_angle(np.exp(lE_Cher),delta)
         phi = self.throw_phi(lE_Cher.size)
         theta = cp.spherical_cosines(theta_e,theta_g,phi)
-        return self.make_gg(theta)
+        return self.make_gg(theta), self.make_ratio(theta)
 
     def make_gg_list(self):
         gg_list = []
@@ -108,9 +134,10 @@ class mcCherenkov():
 
     def make_gg_array(self):
         gg_array = np.empty((self.table.delta.size,self.table.theta.size))
+        ratio_array = np.empty(self.table.delta.shape)
         for i,d in enumerate(self.table.delta):
-            gg_array[i] = self.make_gg_t_delta(d)
-        return gg_array
+            gg_array[i], ratio_array[i] = self.make_gg_t_delta(d)
+        return gg_array, ratio_array
 
     def throw_lE(self, N=1):
         '''
