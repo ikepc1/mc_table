@@ -275,8 +275,8 @@ class LateralDistribution:
     #             xp11   xp12    xp13    zp01   zp02 zp03  zp04   zp05    zp11   zp12
     pz = np.array([0.859,-0.0461,0.00428,0.0263,1.34,0.160,-0.0404,0.00276,0.0263,-4.33])
 
-    ll = 1.e-3 #lower limit
-    ul = 100 #upper limitl
+    ll = np.log(1.e-3) #lower limit
+    ul = np.log(1.e2) #upper limit
 
     def __init__(self,lE,t):
         """Set the parameterization constants for this type (log)energy. The
@@ -290,7 +290,7 @@ class LateralDistribution:
         self.lE = lE
         self.t = t
         self.C0 = 1.
-        self.normalize(t)
+        self.normalize()
 
     def _set_xp1(self):
         xp11 = self.pz[self.pm['xp11']]
@@ -298,45 +298,59 @@ class LateralDistribution:
         xp13 = self.pz[self.pm['xp13']]
         self.xp1 = xp11 + xp12*self.lE**2 + xp13*self.lE**3
 
-    def _set_zp0(self,t):
+    def _set_zp0(self):
         zp01 = self.pz[self.pm['zp01']]
         zp02 = self.pz[self.pm['zp02']]
         zp03 = self.pz[self.pm['zp03']]
         zp04 = self.pz[self.pm['zp04']]
         zp05 = self.pz[self.pm['zp05']]
-        self.zp0 = zp01*t + zp02 + zp03*self.lE + zp04*self.lE**2 + zp05*self.lE**3
+        self.zp0 = zp01*self.t + zp02 + zp03*self.lE + zp04*self.lE**2 + zp05*self.lE**3
 
-    def _set_zp1(self,t):
+    def _set_zp1(self):
         zp11 = self.pz[self.pm['zp11']]
         zp12 = self.pz[self.pm['zp12']]
-        self.zp1 = zp11*t + zp12
+        self.zp1 = zp11*self.t + zp12
 
-    def normalize(self,t):
+    def normalize(self):
         self.C0 = 1.
         self._set_xp1()
-        self._set_zp0(t)
-        self._set_zp1(t)
+        self._set_zp0()
+        self._set_zp1()
         intgrl,eps = quad(self.n_t_lE_lX,self.ll,self.ul)
         self.C0 = 1/intgrl
 
-    def set_lE(self,lE,t):
+    def set_lE(self,lE):
         self.lE = lE
-        self.t = t
-        self.normalize(t)
+        self.normalize()
 
-    def n_t_lE_lX(self,X):
+    def set_t(self,t):
+        self.t = t
+        self.normalize()
+
+    def n_t_lE_lX(self,lX):
         """
         This function returns the particle lateral distribution as an
         angle at a given energy.
 
         Parameters:
-            X: dimensionless Moliere units
+            lX: log ofdimensionless Moliere units
 
         Returns:
             n_t_lE_lX = the lateral distribution
         """
-
+        X = np.exp(lX)
         return self.C0 * X**self.zp0 * (self.xp1 + X)**self.zp1
+
+    @staticmethod
+    def moliere_radius(d: float) -> float:
+        '''Returns approximate Moliere radius at density (d)
+
+        Parameters:
+        d: density (kg/m^3)
+        returns:
+        Moliere radius (m)
+        '''
+        return 96. / d
 
 class LateralDistributionNKG:
     '''
@@ -350,8 +364,8 @@ class LateralDistributionNKG:
 
     pm = {'zp00':0,'zp01':1,'zp10':2,'zp11':3,'xp10':4}
     pz = np.array([0.0238,1.069,0.0238,2.918,0.430])
-    ll = np.log(1.e-5)
-    ul = np.log(1.e2)
+    ll = np.log(1.e-3)
+    ul = np.log(1.e1)
 
     def __init__(self,t):
         self.t = t
@@ -370,6 +384,19 @@ class LateralDistributionNKG:
     def set_xp1(self):
         self.xp1 = self.pz[self.pm['xp10']]
 
+    def n_t_lX_of_X(self, X):
+        """
+        This function returns the particle lateral distribution as a
+        function of the Moliere radius.
+
+        Parameters:
+        X = Moliere radius (dimensionless)
+
+        Returns:
+        n_t_lX = the normalized lateral distribution value at X
+        """
+        return self.C0 * X ** self.zp0 * (self.xp1 + X) ** self.zp1
+
     def n_t_lX(self,lX):
         """
         This function returns the particle lateral distribution as a
@@ -382,7 +409,7 @@ class LateralDistributionNKG:
         n_t_lX = the normalized lateral distribution value at X
         """
         X = np.exp(lX)
-        return self.C0 * X ** self.zp0 * (self.xp1 + X) ** self.zp1
+        return self.n_t_lX_of_X(X)
 
     def set_t(self,t):
         self.t = t
@@ -398,67 +425,77 @@ class LateralDistributionNKG:
         self.AVG = self.AVG_Moliere()
 
     def AVG_integrand(self,X):
-        lX = np.log(X)
-        return self.n_t_lX(lX)
+        return X * self.n_t_lX(X)
 
     def AVG_Moliere(self):
-        ll = np.exp(self.ll)
-        ul = np.exp(self.ul)
-        intgrl,eps = quad(self.AVG_integrand,ll,ul)
+        intgrl,eps = quad(self.AVG_integrand,self.ll,self.ul)
         return intgrl
 
-    def n_t_rm_r(self,r,rm):
-        '''
-        This function returns the density of particles per unit area at distance
-        r given values of t and rm.
+    def d_rho_dA_of_r_d(self, r: float, d: float) -> float:
+        '''This method returns the fractional particle density at a distance r
+        from a piont in the shower core.
+
         Parameters:
-        r = distance from the shower axis (m)
-        rm = the Moliere radius for a given atmospheric height (m)
+        r: distance from shower core (m)
+        r_M: the approximate Moliere radius at the shower core (m)
+        d: the atmospheric density at the core (kg / m^3)
 
         returns:
-        the density of particles per unit area
+        fractional particle density (fraction of total particles / m^2)
         '''
-        X = r / rm
-        return self.n_t_lX(np.log(X)) / (2 * np.pi * (X * rm) ** 2)
+        rM = self.moliere_radius(d)
+        X = r / rM
+        return self.n_t_lX_of_X(X) / (2. * np.pi * X**2 * rM**2)
 
-    def r_avg_integrand(self,r,rm):
-        return 2 * np.pi * r**2 * self.n_t_rm_r(r,rm)
+    @staticmethod
+    def moliere_radius(d: float) -> float:
+        '''Returns approximate Moliere radius at density (d)
 
-    def AVG_r(self,rm):
-        ll = np.exp(self.ll) * rm
-        ul = np.exp(self.ul) * rm
-        return quad(self.r_avg_integrand,ll,ul, args = rm)[0]
+        Parameters:
+        d: density (kg/m^3)
+        returns:
+        Moliere radius (m)
+        '''
+        return 96. / d
 
-    def r_avg_integrand_simple(self,r,rm):
-        X = r / rm
-        return self.n_t_lX(np.log(X))
-
-    def AVG_r_simple(self,rm):
-        ll = np.exp(self.ll) * rm
-        ul = np.exp(self.ul) * rm
-        return quad(self.r_avg_integrand_simple,ll,ul, args = rm)[0]
+    def make_table(self):
+        atm = Atmosphere()
+        ts = np.linspace(-20.,20.,100)
+        ds = np.linspace(atm.density(0.), atm.density(atm.maximum_height), 1000)
+        rs = np.logspace(-3,3,300)
+        drho_dN_of_t_d_r = np.empty((ts.size,ds.size,rs.size),dtype=float)
+        for i, t in enumerate(ts):
+            self.set_t(t)
+            for j, d in enumerate(ds):
+                drho_dN_of_t_d_r[i,j] = self.d_rho_dA_of_r_d(rs, d)
+        return ts, ds, rs, drho_dN_of_t_d_r
 
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     plt.ion()
+    atm = Atmosphere()
+    d = atm.density(0.)
 
-    ld = LateralDistributionNKG(0)
-    ts = np.linspace(-20,20,21)
-    avg = np.empty_like(ts)
-    avg_r = np.empty_like(ts)
-    m = 78.
-    for i,t in enumerate(ts):
-        ld.set_t(t)
-        avg[i] = ld.AVG
-        avg_r[i] = ld.AVG_r_simple(m)
-    np.savez('lateral.npz',t=ts,avg=avg)
-    avg_X = avg_r / m
+    # x = np.linspace(1.e-3,1.e2,1000)
+    x = np.logspace(-3,2,1000)
+    lx = np.log(x)
+    ld = LateralDistribution(np.log(1.), 0)
     plt.figure()
-    plt.title('t vs avg Moliere')
-    plt.plot(ts,avg, label = "calc'd w'out r_m")
-    plt.plot(ts,avg_X, label = "calc'd with r_m")
+    plt.plot(x, 10000*ld.n_t_lE_lX(lx), label = f"t = {ld.t}, E = {np.exp(ld.lE)}")
+    ld.set_lE(np.log(5.))
+    plt.plot(x, 1000*ld.n_t_lE_lX(lx), label = f"t = {ld.t}, E = {np.exp(ld.lE)}")
+    ld.set_lE(np.log(30.))
+    plt.plot(x, 100*ld.n_t_lE_lX(lx), label = f"t = {ld.t}, E = {np.exp(ld.lE)}")
+    ld.set_lE(np.log(170.))
+    plt.plot(x, 10*ld.n_t_lE_lX(lx), label = f"t = {ld.t}, E = {np.exp(ld.lE)}")
+    ld.set_lE(np.log(1000.))
+    plt.plot(x, ld.n_t_lE_lX(lx), label = f"t = {ld.t}, E = {np.exp(ld.lE)}")
+    plt.ylim(1.e-5,1.e4)
+    plt.loglog()
     plt.legend()
+    plt.xlabel('X (Moliere Units)')
+    plt.ylabel('n_t_lX')
 
     # ll = np.radians(0.1)
     # ul = np.radians(45.)
@@ -499,4 +536,3 @@ if __name__ == '__main__':
     # plt.legend()
     # plt.xlabel('Theta [rad]')
     # plt.ylabel('n(t;lE,Omega)')
-    plt.show()

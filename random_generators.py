@@ -1,6 +1,6 @@
 import numpy as np
 from cherenkov_photon import CherenkovPhoton as cp
-from charged_particle import EnergyDistribution, AngularDistribution
+from charged_particle import EnergyDistribution, AngularDistribution, LateralDistribution
 import scipy.stats as st
 from scipy.constants import value,nano
 from scipy.integrate import quad, cumtrapz
@@ -57,40 +57,38 @@ class Qgen(AngularDistribution):
 class Qgen_from_table():
     """This is a class for drawing random charged particle angles"""
     q_table_file = 'qecdf_lE.npz'
-
     def __init__(self):
         self.table = np.load(self.q_table_file)
         self.lEs = self.table['lEs']
         self.cdfs = self.table['qecdf_lE']
 
     def gen_theta(self,lE,N=1):
-        """This function generates N charged particle angles
-        from the distribution corresponding to lE"""
         rvs = st.uniform.rvs(size=N)
         diff = np.abs(lE-self.lEs)
         # i_lE = np.searchsorted(self.lEs,lE)
         i_lE = np.abs(lE-self.lEs).argmin()
         cdf = self.cdfs[i_lE]
-        return np.interp(rvs,cdf[1],cdf[0])#, rvs
+        return np.interp(rvs,cdf[1],cdf[0]), rvs
 
-    def gen_thetas(self,cdf,N):
+class Xgen(LateralDistribution):
+    '''This class generates particle moliere radii.
+    '''
+
+    def __init__(self, lE, t):
+        super().__init__(lE, t)
+        self.lXs = np.linspace(self.ll,self.ul,10000)
+        self.cdf = self.make_cdf(self.lXs)
+
+    def make_cdf(self,lXs):
+        cdf = np.empty_like(lXs)
+        cdf[0] = 0.
+        cdf[1:] = cumtrapz(self.n_t_lE_lX(lXs),lXs)
+        cdf /= cdf.max()
+        return cdf
+
+    def gen_lX(self, N=1):
         rvs = st.uniform.rvs(size=N)
-        return np.interp(rvs,cdf[1],cdf[0])
-
-    def bin_lEs(self, lE_array):
-        dlE = np.diff(self.lEs)[0] / 2
-        bins = np.empty(self.lEs.size + 1)
-        bins[0] = self.lEs[0] - dlE
-        bins[1:] = self.lEs + dlE
-        return np.histogram(lE_array, bins = bins)[0]
-
-    def lE_to_qe(self,lE_array):
-        N_per_lE = self.bin_lEs(lE_array)
-        qe = []
-        for i,lE in enumerate(self.lEs):
-            qe.extend(self.gen_thetas(self.cdfs[i],N_per_lE[i]))
-        return np.asarray(qe)
-
+        return np.interp(rvs,self.cdf,self.lXs)
 
 
 
@@ -104,12 +102,13 @@ class mcCherenkov():
     min_lE = np.log(cp.cherenkov_threshold(table.delta.max()))
 
     def __init__(self, t, Nch, min_l = 300, max_l = 600):
-        self.t = t
         self.Nch = Nch
+        self.t = t
         self.Egen = Egen(self.t, self.ul)
         self.Qgen = Qgen_from_table()
         lE_array = self.throw_lE(Nch)
         self.lE_array = lE_array[lE_array>self.min_lE]
+        self.theta_e = self.make_theta_e(self.lE_array)
         self.theta_bins, self.mid_theta_bins = self.make_bins()
         self.gg_array, self.ratio_array = self.make_gg_array()
 
@@ -119,8 +118,7 @@ class mcCherenkov():
     def make_gg_t_delta(self,delta):
         lE_Cher_bool = self.throw_gamma(self.lE_array,delta)
         lE_Cher = self.lE_array[lE_Cher_bool]
-        # theta_e = self.theta_e[lE_Cher_bool]
-        theta_e = self.Qgen.lE_to_qe(lE_Cher)
+        theta_e = self.theta_e[lE_Cher_bool]
         theta_g = cp.cherenkov_angle(np.exp(lE_Cher),delta)
         phi = self.throw_phi(lE_Cher.size)
         theta = cp.spherical_cosines(theta_e,theta_g,phi)
@@ -180,28 +178,31 @@ class mcCherenkov():
         '''
         return self.Qgen.gen_theta(lE,N)[0]
 
+    def throw_lX(self, lE, N=1):
+        return Xgen(lE, self.t).gen_lX(N)
+
     def throw_phi(self,N=1):
         return 2*np.pi*st.uniform.rvs(size=N)
 
     def cherenkov_dE(self,min_l,max_l):
         return self.hc/(min_l*nano) - self.hc/(max_l*nano)
 
-    def max_yield(self,delta,min_l,max_l):
-        '''
-        This function returns the max possible Cherenkov yield of a hyper
-        relativistic charged parrticle.
-
-        Parameters:
-        delta: atmospheric delta at which to calculate the yield
-        min_l: minimum cherenkov wavelength
-        max_l: maximum cherenkov wavelength
-
-        returns:
-        the number of cherenkov photons per meter per charged particle
-        '''
-        alpha_over_hbarc = 370.e2
-        chq = cp.cherenkov_angle(1.e12,delta)
-        return alpha_over_hbarc*np.sin(chq)**2*self.cherenkov_dE(min_l,max_l)
+    # def max_yield(self,delta,min_l,max_l):
+    #     '''
+    #     This function returns the max possible Cherenkov yield of a hyper
+    #     relativistic charged parrticle.
+    #
+    #     Parameters:
+    #     delta: atmospheric delta at which to calculate the yield
+    #     min_l: minimum cherenkov wavelength
+    #     max_l: maximum cherenkov wavelength
+    #
+    #     returns:
+    #     the number of cherenkov photons per meter per charged particle
+    #     '''
+    #     alpha_over_hbarc = 370.e2
+    #     chq = cp.cherenkov_angle(1.e12,delta)
+    #     return alpha_over_hbarc*np.sin(chq)**2*self.cherenkov_dE(min_l,max_l)
 
     def throw_gamma(self,lEs,delta):
         cy = cp.cherenkov_yield(np.exp(lEs), delta)
@@ -218,22 +219,22 @@ class mcCherenkov():
             theta_e[i] = self.throw_qe_table(lE)
         return theta_e
 
-    def calculate_theta(self,lEs):
-        '''
-        Make an array of Cherenkov photon angles corresponding to an array of
-        Cherenkov producing log energies (lEs)
-        returns:
-        theta: array of Cherenkov photon angles (with respect to the shower axis)
-        theta_e: array of charged particle angles
-        theta_g: array of Cherenkov photon angles (with respect to the charged
-        particle travel direction)
-        phi: array of cherenkov photon azimuthal angles (with respect to the charged
-        particle travel direction)
-        '''
-        theta_e = self.make_theta_e(lEs)
-        theta_g = cp.cherenkov_angle(np.exp(lEs),self.delta)
-        phi = self.throw_phi(lEs.size)
-        return cp.spherical_cosines(theta_e,theta_g,phi), theta_e, theta_g, phi
+    # def calculate_theta(self,lEs):
+    #     '''
+    #     Make an array of Cherenkov photon angles corresponding to an array of
+    #     Cherenkov producing log energies (lEs)
+    #     returns:
+    #     theta: array of Cherenkov photon angles (with respect to the shower axis)
+    #     theta_e: array of charged particle angles
+    #     theta_g: array of Cherenkov photon angles (with respect to the charged
+    #     particle travel direction)
+    #     phi: array of cherenkov photon azimuthal angles (with respect to the charged
+    #     particle travel direction)
+    #     '''
+    #     theta_e = self.make_theta_e(lEs)
+    #     theta_g = cp.cherenkov_angle(np.exp(lEs),self.delta)
+    #     phi = self.throw_phi(lEs.size)
+    #     return cp.spherical_cosines(theta_e,theta_g,phi), theta_e, theta_g, phi
 
     def make_ecdf(self,theta):
         sorted_q = np.sort(theta)
@@ -303,7 +304,7 @@ if __name__ == '__main__':
     import time
     plt.ion()
 
-    t = -6.
+    t = -0.
     N = 50000
 
     start_time = time.time()
